@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as core from '@actions/core';
 import * as tc from '@actions/tool-cache';
 import { Octokit } from "@octokit/core";
+import { createActionAuth } from "@octokit/auth-action";
 import { Error, isError } from './error';
 
 // versionPrefix is used in Github release names, and can
@@ -68,7 +69,7 @@ async function getDownloadURL(version: string): Promise<string | Error> {
   }
 
   const assetName = `flytectl_${platform}_${architecture}.tar.gz`
-  const octokit = new Octokit();
+  const octokit = new Octokit({ authStrategy: createActionAuth });
   const { data: releases } = await octokit.request(
     'GET /repos/{owner}/{repo}/releases',
     {
