@@ -70,17 +70,48 @@ async function getDownloadURL(version: string): Promise<string | Error> {
 
   const assetName = `flytectl_${platform}_${architecture}.tar.gz`
   const octokit = new Octokit({ authStrategy: createActionAuth });
-  const { data: releases } = await octokit.request(
-    'GET /repos/{owner}/{repo}/releases',
-    {
-      owner: 'flyteorg',
-      repo: 'flyte',
+  // flyteorg/flyte is a monorepo that publishes releases for many components
+  // (flyte core, flyteidl, flytectl, ...). flytectl releases are tagged with a
+  // `flytectl/` prefix. The releases endpoint is paginated and ordered most
+  // recent first, so we page through it until we have collected the flytectl
+  // releases we need. Without paging, a burst of non-flytectl releases can push
+  // every `flytectl/` tag off the first page, leaving us with nothing to pick.
+  const perPage = 100;
+  const maxPages = 20;
+  const filteredReleases: { tag_name: string; assets: { name: string; browser_download_url: string }[] }[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const { data: releases } = await octokit.request(
+      'GET /repos/{owner}/{repo}/releases',
+      {
+        owner: 'flyteorg',
+        repo: 'flyte',
+        per_page: perPage,
+        page,
+      }
+    );
+    // Filter out releases for which the tags do not have the prefix `flytectl/`
+    filteredReleases.push(...releases.filter((release) => release.tag_name.startsWith('flytectl/')));
+    // For `latest` we only need the most recent flytectl release; stop as soon
+    // as we have found one. For a specific version, keep paging until we find a
+    // matching tag or run out of releases.
+    if (version === 'latest' && filteredReleases.length > 0) {
+      break;
     }
-  );
-  // Filter out releases for which the tags do not have the prefix `flytectl/`
-  const filteredReleases = releases.filter((release) => release.tag_name.startsWith('flytectl/'));
+    if (version !== 'latest' && filteredReleases.some((release) => releaseTagIsVersion(release.tag_name, version))) {
+      break;
+    }
+    if (releases.length < perPage) {
+      // Last page reached.
+      break;
+    }
+  }
   switch (version) {
     case 'latest':
+      if (filteredReleases.length === 0) {
+        return {
+          message: `Unable to find any flytectl release in flyteorg/flyte.`
+        };
+      }
       for (const asset of filteredReleases[0].assets) {
         if (assetName === asset.name) {
           return asset.browser_download_url;
